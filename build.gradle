@@ -1,0 +1,47 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.atdigital.imr'
+version = '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // JNA — lets Java call native C DLLs without writing any C wrapper code
+    implementation 'net.java.dev.jna:jna:5.14.0'
+
+    // jSerialComm — serial port (RS-232 / RS-485) library, no native driver setup needed
+    implementation 'com.fazecast:jSerialComm:2.10.4'
+}
+
+application {
+    mainClass = 'com.atdigital.imr.MeterClient'
+}
+
+// Tell JVM where to find IMR.Core.x64.dll when running via 'gradle run'
+run {
+    jvmArgs "-Djna.library.path=${projectDir}/native"
+}
+
+// Fat JAR — includes JNA and all dependencies so you can run with: java -jar
+jar {
+    archiveBaseName = 'imr-java-client'
+    manifest {
+        attributes 'Main-Class': 'com.atdigital.imr.MeterClient'
+    }
+    from {
+        configurations.runtimeClasspath.collect {
+            it.isDirectory() ? it : zipTree(it)
+        }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

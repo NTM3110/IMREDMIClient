@@ -1,0 +1,7 @@
+Place IMR.Core.x64.dll here.
+
+Build it from Visual Studio:
+  - Open DLMS\IMR.sln
+  - Configuration: Release | x64
+  - Right-click IMR.Core → Build
+  - Copy from: DLMS\Build\Release\IMR.Core.x64.dll
