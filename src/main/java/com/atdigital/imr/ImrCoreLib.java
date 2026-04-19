@@ -142,4 +142,15 @@ public interface ImrCoreLib extends Library {
         PointerByReference      fieldsRef,
         byte[]                  errCode
     );
+
+    int EdmiSearchProfile(
+        ReadFromMediaCallback   readCallback,
+        WriteAllToMediaCallback  writeCallback,
+        int                     serial,
+        short                   survey,
+        EdmiDateTime.ByValue    fromDateTime,
+        EdmiDateTime.ByValue    toDateTime,
+        EdmiProfileSpec         profileSpec,
+        byte[]                  errCode
+    );
 }

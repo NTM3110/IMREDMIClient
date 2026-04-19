@@ -9,6 +9,9 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * EDMI meter client over serial port (RS-232 / RS-485) using IMR.Core.x64.dll via JNA.
@@ -24,7 +27,7 @@ import java.nio.ByteOrder;
 public class MeterClient {
 
     // ─── Change these to match your meter ────────────────────────────────────
-    private static final String COM_PORT      = "COM8";     // e.g. COM1, COM3, COM5
+    private static final String COM_PORT      = "COM3";     // e.g. COM1, COM3, COM5
     private static final int    BAUD_RATE     = 9600;       // typical EDMI baud: 9600 or 19200
     private static final int    DATA_BITS     = 8;
     private static final int    STOP_BITS     = SerialPort.ONE_STOP_BIT;
@@ -204,6 +207,8 @@ public class MeterClient {
         byte[]         errCode  = new byte[1];
         for (int i = 0; i < addresses.length; i++) {
             regs[i].Address = addresses[i];
+            regs[i].Type = EdmiRegisters.getType(addresses[i]);
+            regs[i].write();
         }
 
         int result = lib.EdmiReadRegisters(reader, writer, METER_SERIAL, regs, regs.length, errCode);
@@ -211,6 +216,7 @@ public class MeterClient {
             addresses.length, MediaError.name(result), errCode[0] & 0xFF);
 
         for (EdmiRegister reg : regs) {
+            reg.read();
             char type = (char)(reg.Type & 0xFF);
             System.out.printf("  0x%04X type=%c err=%d", reg.Address, type, reg.ErrorCode & 0xFF);
             switch (type) {
@@ -238,6 +244,10 @@ public class MeterClient {
         PointerByReference fieldsRef   = new PointerByReference();
         byte[]             errCode     = new byte[1];
 
+        System.out.printf("Reading profile from %04d-%02d-%02d %02d:%02d:%02d to %04d-%02d-%02d %02d:%02d:%02d%n",
+            from.Year + 2000, from.Month, from.Day, from.Hour, from.Minute, from.Second,
+            to.Year + 2000, to.Month, to.Day, to.Hour, to.Minute, to.Second);
+
         int result = lib.EdmiReadProfile(
             reader, writer, METER_SERIAL,
             survey, from, to,
@@ -261,28 +271,97 @@ public class MeterClient {
         }
         System.out.println();
 
-        // Read native field array — layout: [row0_ch0][row0_ch1]...[row1_ch0]...
-        // Each EDMI_FILE_FIELD = 25 bytes
+        // Print channel types and scaling
+        System.out.print("  ");
+        for (int c = 0; c < channels; c++) {
+            char type = (char)(profileSpec.ChannelsInfo[c].Type & 0xFF);
+            float scale = profileSpec.ChannelsInfo[c].ScalingFactor;
+            System.out.printf("%c:%.3f        ", type, scale);
+        }
+        System.out.println();
+
+        // ── Native field array ─────────────────────────────────────────────────
+        // Layout: [row0_ch0][row0_ch1]...[row1_ch0]... each slot is EDMI_FILE_FIELD.Value[25].
+        final int FIELD_STRIDE  = 25;
+
         Pointer p = fieldsRef.getValue();
         if (p == null) return;
 
-        final int FIELD_SIZE = 25;
+        int recordStride = FIELD_STRIDE * channels;
+        final Instant base1996 = Instant.parse("1996-01-01T00:00:00Z");
+
         for (int r = 0; r < rows; r++) {
             System.out.print("  ");
             for (int c = 0; c < channels; c++) {
-                long   offset = (long)(r * channels + c) * FIELD_SIZE;
-                byte[] raw    = p.getByteArray(offset, FIELD_SIZE);
-                char   type   = (char)(profileSpec.ChannelsInfo[c].Type & 0xFF);
+                long slotBase = (long)r * recordStride + (long)c * FIELD_STRIDE;
+                char type = (char)(profileSpec.ChannelsInfo[c].Type & 0xFF);
+
                 switch (type) {
-                    case 'F': case 'O':
-                        System.out.printf("%-14.4f", ByteBuffer.wrap(raw, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getFloat());
+
+                    case 'H': {
+                        // HEX_SHORT: unsigned 16-bit LE at offset 0
+                        byte[] raw = p.getByteArray(slotBase, 2);
+                        System.out.printf("%-14d",
+                            ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getShort() & 0xFFFF);
                         break;
-                    case 'D': case 'U':
-                        System.out.printf("%-14.4f", ByteBuffer.wrap(raw, 0, 8).order(ByteOrder.LITTLE_ENDIAN).getDouble());
+                    }
+
+                    case 'T': {
+                        byte[] raw = p.getByteArray(slotBase, 4);
+                        long seconds = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getInt() & 0xFFFFFFFFL;
+                        LocalDateTime ldt = LocalDateTime.ofInstant(base1996.plusSeconds(seconds), ZoneOffset.UTC);
+                        System.out.printf("%04d-%02d-%02d %02d:%02d:%02d  ",
+                            ldt.getYear(), ldt.getMonthValue(), ldt.getDayOfMonth(),
+                            ldt.getHour(), ldt.getMinute(), ldt.getSecond());
                         break;
-                    case 'L':
-                        System.out.printf("%-14d", ByteBuffer.wrap(raw, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt());
+                    }
+
+                    case 'U': {
+                        byte[] raw = p.getByteArray(slotBase, 8);
+                        long rawValue = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                        double scaledValue = rawValue * profileSpec.ChannelsInfo[c].ScalingFactor;
+                        System.out.printf("%-14.4f",
+                            scaledValue);
                         break;
+                    }
+
+                    case 'F': {
+                        byte[] raw = p.getByteArray(slotBase, 4);
+                        System.out.printf("%-14.4f",
+                            ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getFloat());
+                        break;
+                    }
+
+                    case 'O': {
+                        byte[] raw = p.getByteArray(slotBase, 4);
+                        long rawValue = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getInt() & 0xFFFFFFFFL;
+                        double scaledValue = rawValue * profileSpec.ChannelsInfo[c].ScalingFactor;
+                        System.out.printf("%-14.4f",
+                            scaledValue);
+                        break;
+                    }
+
+                    case 'D': {
+                        byte[] raw = p.getByteArray(slotBase, 8);
+                        System.out.printf("%-14.4f",
+                            ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getDouble());
+                        break;
+                    }
+
+                    case 'L': {
+                        byte[] raw = p.getByteArray(slotBase, 4);
+                        System.out.printf("%-14d",
+                            ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getInt());
+                        break;
+                    }
+
+                    case 'I': {
+                        byte[] raw = p.getByteArray(slotBase, 2);
+                        System.out.printf("%-14d",
+                            (int) ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).getShort());
+                        break;
+                    }
+
                     default:
                         System.out.printf("%-14s", "?");
                 }
@@ -313,7 +392,8 @@ public class MeterClient {
                 return;
             }
 
-            // ── Meter info (serial number uses type 'M' — not supported by DLL) ──
+
+            // // ── Meter info (serial number uses type 'M' — not supported by DLL) ──
 
             client.readRegister(EdmiRegisters.METER_SERIAL_NUMBER);
             client.readRegister(EdmiRegisters.CURRENT_DATE);
@@ -340,6 +420,12 @@ public class MeterClient {
             client.readRegister(EdmiRegisters.CT_RATIO_PRIMARY);
             client.readRegister(EdmiRegisters.VT_RATIO_PRIMARY);
 
+            short survey = 0x0325;
+            // Query from 2026-01-01 to open-ended (null = "to end of available data")
+            // This returns all records the DLL has buffered, including today's intervals.
+            EdmiDateTime.ByValue from = new EdmiDateTime.ByValue(26, 4, 15, 0, 0, 0);
+            EdmiDateTime.ByValue to = new EdmiDateTime.ByValue(26, 4, 16, 0, 0, 0);
+            client.readProfile(survey, from, to);
         } finally {
             client.logout();
             client.disconnect();

@@ -29,7 +29,7 @@ application {
 
 // Tell JVM where to find IMR.Core.x64.dll when running via 'gradle run'
 run {
-    jvmArgs "-Djna.library.path=${projectDir}/native"
+    systemProperty "jna.library.path", file("native").absolutePath
 }
 
 // Fat JAR — includes JNA and all dependencies so you can run with: java -jar

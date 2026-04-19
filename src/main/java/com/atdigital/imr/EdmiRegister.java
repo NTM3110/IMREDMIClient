@@ -100,12 +100,13 @@ public class EdmiRegister extends Structure {
             // DLL parses 'R', 'Q', and 'T' into a 7-byte EDMI_DATE_TIME struct placed in Value[0..6]
             // Format: [0]=Year(since 2000), [1]=Month, [2]=Day, [3]=Hour, [4]=Min, [5]=Sec, [6]=IsNull
             case 'R': // Date
-                return String.format("%04d-%02d-%02d", Value[0] + 2000, Value[1], Value[2]);
+                return String.format("%04d-%02d-%02d", (Value[0] & 0xFF) + 2000, Value[1] & 0xFF, Value[2] & 0xFF);
             case 'Q': // Time
-                return String.format("%02d:%02d:%02d", Value[3], Value[4], Value[5]);
+                return String.format("%02d:%02d:%02d", Value[3] & 0xFF, Value[4] & 0xFF, Value[5] & 0xFF);
             case 'T': // DateTime
                 return String.format("%04d-%02d-%02d %02d:%02d:%02d", 
-                        Value[0] + 2000, Value[1], Value[2], Value[3], Value[4], Value[5]);
+                        (Value[0] & 0xFF) + 2000, Value[1] & 0xFF, Value[2] & 0xFF,
+                        Value[3] & 0xFF, Value[4] & 0xFF, Value[5] & 0xFF);
                         
             default:
                 return "Unknown Type " + (char)(Type & 0xFF);
